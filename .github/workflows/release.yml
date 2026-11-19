@@ -2,6 +2,9 @@ name: Release
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - 'README.md'
 permissions:
   contents: read
 concurrency:
@@ -22,15 +25,15 @@ jobs:
       INSTANCE_ID: ${{ vars.INSTANCE_ID }}
       DOCUMENT: ${{ vars.SSM_DOCUMENT }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with: {persist-credentials: false}
-      - uses: aws-actions/configure-aws-credentials@v4
+      - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ vars.AWS_RELEASE_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
       - uses: aws-actions/amazon-ecr-login@v2
         id: login
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
       - name: Resolve immutable release
         id: release
         run: |
@@ -44,7 +47,7 @@ jobs:
             jq -e --arg v "$version" '.imageDetails[0].imageTags | index($v) != null' "$RUNNER_TEMP/image.json"
             echo "exists=true" >> "$GITHUB_OUTPUT"
           fi
-      - uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@v7
         if: steps.release.outputs.exists != 'true'
         with:
           context: .

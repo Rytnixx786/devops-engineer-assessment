@@ -6,9 +6,9 @@ jobs:
   checks:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with: {persist-credentials: false}
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with: {go-version: '1.26.5'}
       - name: Lint and test
         run: |
@@ -19,7 +19,7 @@ jobs:
           shellcheck system_health.sh scripts/*.sh observability/start-node-exporter.sh
           bash scripts/test-health.sh
           docker run --rm -i hadolint/hadolint:v2.12.0 < Dockerfile
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with: {name: coverage, path: coverage.out}
       - name: Test alert rules
         run: docker run --rm --entrypoint promtool -v "$PWD/observability/prometheus:/rules:ro" -w /rules prom/prometheus:v3.6.0 test rules tests.yml
