@@ -132,5 +132,6 @@ resource "aws_iam_role_policy" "release" {
   ] })
 }
 output "instance_id" { value = aws_instance.app.id }
+output "public_ip" { value = aws_instance.app.public_ip }
 output "role_arn" { value = aws_iam_role.release.arn }
 output "ssm_document" { value = aws_ssm_document.release.name }
