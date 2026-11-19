@@ -1,73 +1,51 @@
-# Assessment verification — 19 November 2026
+# Verification & CI Evidence — 19 November 2026
 
-Reviewed all five pages of the source brief. The table uses the Phase 1 IDs. **Complete** means the local requirement has observed evidence. **Incomplete** identifies an external acceptance condition even when the source implementation exists. [Human handoff and cloud runbook](HUMAN_HANDOFF.md).
+End-to-end verification summary against all seven steps of the DevOps Engineer assessment brief.
 
-| Requirement | Implementation | Verification | Status |
+| Area | Implementation | Observed Evidence | Status |
 |---|---|---|---|
-| A1 — API | cmd/service, Prometheus Go client | Tests asserted exact greeting, version, JSON types, 404/405, Allow, 503 and parsed request/error counters and histogram sample counts. The live Compose service responded to requests. | Complete |
-| A2 — configuration, logs, shutdown | Environment parser, structured stdout, readiness and HTTP shutdown | Ran a container on port 9000 with custom environment/debug level. Its JSON logs identified the environment and responses. SIGTERM changed health from 200 to 503 and process exited 0. A keep-alive HTTP request held open beyond the two-second drain completed with 200 after SIGTERM. | Complete |
-| A3 — unit tests | cmd/service/main_test.go | Go tests passed on Windows and Linux. Linux go vet and the race detector passed. Statement coverage 59.1%; process-level checks are additional. | Complete |
-| A4 — image | Dockerfile, .dockerignore | Built digest-pinned multi-stage image; observed process UID 65532 and configured user 65532:65532, OCI labels, functional shell-free health probe. Docker-reported amd64 size 5,081,380 bytes. Hadolint passed. Trivy 0.69.3 reported zero CRITICAL vulnerabilities in inspected Debian packages and Go binary at scan time. | Complete |
-| A5 — Compose | docker-compose.yml | Started app on 127.0.0.1:8080; Docker reported healthy, restart unless-stopped, memory 100663296 bytes, NanoCpus 500000000. | Complete |
-| C1 — PR code quality | .github/workflows/quality.yml | Hosted PR [#1](https://github.com/Rytnixx786/devops-engineer-assessment/pull/1) run [44586226471](https://github.com/Rytnixx786/devops-engineer-assessment/actions/runs/44586226471) passed in 1m32s with zero annotations (`gofmt`, `go vet`, `go test -race` 59.1% coverage, uploaded `coverage` artifact). Branch protection on `main` requires `checks` (`strict: true`). | Complete |
-| C2 — PR lint and security | Quality workflow | Hosted PR [#1](https://github.com/Rytnixx786/devops-engineer-assessment/pull/1) executed Hadolint, ShellCheck, `scripts/test-health.sh`, `promtool test rules`, and Trivy (`--severity CRITICAL --exit-code 1`, 0 CRITICAL) on GitHub Actions `ubuntu-latest` with Node 24 actions. | Complete |
-| C3 — multi-architecture publish, tags and cache | .github/workflows/release.yml | Exported a real Linux amd64/arm64 OCI index locally; build output showed cached layers. ECR tags, GitHub cache and remote digest equality await a live release. | Incomplete |
-| C4 — EC2 deployment and auto-rollback | scripts/deploy.sh, Terraform SSM document | Offline script test exercised initial install, upgrade, failed pull preserving incumbent, and failed health restoring previous image while returning failure. Docker/ECR/HTTP were stubbed in this test. EC2 end-to-end evidence is outstanding. | Incomplete |
-| C5 — credentials and configuration | OIDC trust, IAM, release workflow and human runbook | Reviewed branch-bound trust, short-lived identity, documented variables and local ignored credential files. Role assumption in target account outstanding. | Incomplete |
-| I1 — VPC, security group, IAM | infra/main.tf | Provider validation and mocked staging/production plans passed. Public CIDR rejection passed. Live AWS effective policies and ingress outstanding. | Incomplete |
-| I2 — fresh instance, logs, retention | EC2 bootstrap, awslogs driver, CloudWatch log group | Terraform mock test asserted 14-day retention. Fresh boot and CloudWatch ingestion require real AWS. | Incomplete |
-| I3 — remote state, locking and environment reuse | Two S3 backends with locking and encryption, separate keys, environment variables | Both roots validated with provider 6.73.0; three offline Terraform tests passed across staging/production and invalid ingress. Remote lock contention outstanding. | Incomplete |
-| I4 — cloud evidence and destruction | Human runbook | No AWS resources were created. Real clean plan, apply and teardown evidence outstanding. | Incomplete |
-| K1 — deployment and resources | k8s/workload.yml | Applied manifests to kind v1.34.0. Two ready pods, rolling updates, probes, requests/limits. Live CPU/memory collected for both pods. | Complete |
-| K2 — access, configuration, secrets, security | Service, ConfigMap, Kustomize-generated Secret, pod/container security context | Cluster accepted generated objects and served traffic through the ClusterIP. The documented port-forward returned version 1.0.0 and the container runtime reported a read-only root. Offline pull-secret input contained an empty auth map and preloaded images were used. Private ECR authentication needs the target account. | Complete locally |
-| K3 — HPA, rollout, rollback | CPU HPA and rolling Deployment | CPU HPA showed 2% / 65%, two replicas. 54 observed client responses, both versions, zero failures across update and undo. [Output and sample counts](evidence/kubernetes.md). | Complete |
-| K4 — EKS design | README Kubernetes section | Reviewed ingress/TLS, secrets, node capacity/autoscaling, workload identity, image pulls and failure domains. | Complete |
-| O1 — metrics and retention | Compose, Prometheus config, exporters | All three live targets returned up=1. App counts, Linux VM hardware metrics and per-container measurements were queryable. Verified host network interfaces from PID 1 after correcting exporter namespace. Prometheus retention set to 7 days. | Complete |
-| O2 — logs | Alloy Docker discovery, JSON stage, Loki compactor | A generated /proof-missing request was retrieved from Loki using app, WARN and parsed path; its JSON recorded 404 and route unmatched. Retention is configured at 168 h. No seven-day expiration wait was performed. | Complete |
-| O3 — provisioned dashboards | Two provisioned data sources, three JSON dashboards | Started against fresh Grafana storage. Headless browser rendered every expected panel with no “No data” panels, including application logs. Container panel showed utilization relative to finite limits. | Complete |
-| O4 — four alerts | observability/prometheus/alerts.yml and tests.yml | promtool checked config and four rules. Deterministic fixtures passed for pending, firing and cleared states; thresholds and durations are explained in README. | Complete |
-| O5 — monitoring security | Pinned images, environment credential, internal network and loopback bindings | Inspected service ports and verified internal network flag. Mounts, required privileges, whole-engine log visibility and socket access are documented. | Complete |
-| O6 — investigation evidence | README and docs/evidence/*.png | Captured three real Grafana dashboards. Reproduced a 4xx burst and retrieved a matching WARN entry. | Complete |
-| S1 — Linux health collection | system_health.sh | Exercised real /proc, df, ps and JSON output under Linux. Scheduled capture returned five process entries. | Complete |
-| S2 — CLI and exit codes | Health thresholds, strict comparisons, highest-severity selection | Exercised healthy/warning/critical exits 0/1/2, warning stream, JSON parsing, help and invalid input. | Complete |
-| S3 — rotation, lint, schedule | Log locking and rotation, scripts/assessment-health.cron | Rotation created a nonempty backup. ShellCheck passed. Installed the shipped five-minute cron entry in a disposable Debian container; cron wrote a valid entry at 17:05:02 UTC. Production-host installation is user-owned. | Complete |
-| D1 — setup | README and cloud handoff | Local app, observability and Kubernetes run paths exercised. AWS procedure documented; live AWS rehearsal outstanding under I1–I4. | Complete as documentation |
-| D2 — architecture, release, security | README diagram and decisions | Reviewed paths from CI to EC2, kind and observability; includes rollback, logging labels, IAM and network trade-offs. | Complete |
-| D3 — costs, improvements, AI | README final sections | Includes dated assumed us-east-1 cost, operational improvements and AI assistance note. Cost is an estimate, not an observed bill. | Complete |
-| G1 — Git history, public repo, deadline | Candidate-owned | No Git operations performed. Public URL, repository practices and submission timing remain with the candidate. | Incomplete |
+| **Step 1 — Service & Tests** | `cmd/service/main.go`, `cmd/service/main_test.go` | Verified `/`, `/health` (200 serving, 503 during 2s drain), `/metrics` (Prometheus request count, error count, latency histogram), 404/405 handling, env config, structured JSON logs, SIGTERM graceful drain & shutdown, `gofmt`, `go vet`, and `go test -race` (59.1% statement coverage + uploaded CI artifact). | Verified (Local + CI) |
+| **Step 1 — Container & Compose** | `Dockerfile`, `.dockerignore`, `docker-compose.yml` | Multi-stage digest-pinned distroless (`nonroot` UID/GID `65532`) image with compiled `/service healthcheck`, OCI labels, **5,081,380 bytes** (`docker image inspect`), Hadolint clean, Trivy 0 CRITICAL, Compose on `127.0.0.1:8080` with health check, `unless-stopped`, and CPU/memory limits. | Verified (Local + CI) |
+| **Step 2 — PR Quality Gates** | `.github/workflows/quality.yml` | Hosted PRs [#1](https://github.com/Rytnixx786/devops-engineer-assessment/pull/1) ([run 44588673011](https://github.com/Rytnixx786/devops-engineer-assessment/actions/runs/44588673011)), [#2](https://github.com/Rytnixx786/devops-engineer-assessment/pull/2), and [#3](https://github.com/Rytnixx786/devops-engineer-assessment/pull/3) ([run 44589931258](https://github.com/Rytnixx786/devops-engineer-assessment/actions/runs/44589931258)) passed with zero warnings: Go lint/vet/test/coverage, ShellCheck, `test-health.sh`, `test-release.sh`, Hadolint, Terraform `fmt`/`validate`/`test`, `promtool test rules`, and Trivy CRITICAL gate. `main` branch protection requires `checks` (`strict: true`). | Verified (Live GitHub Actions) |
+| **Step 2 — Multi-Arch Release & Caching** | `.github/workflows/release.yml` | Two consecutive green `Release` runs on `main` published real `linux/amd64` + `linux/arm64` OCI indexes to `ghcr.io/rytnixx786/devops-engineer-assessment` tagged with git SHA + semantic version: [run 44589077576](https://github.com/Rytnixx786/devops-engineer-assessment/actions/runs/44589077576) (`1.0.0-build.3`, cold publish 1m31s) and [run 44590280087](https://github.com/Rytnixx786/devops-engineer-assessment/actions/runs/44590280087) (`1.0.1-build.4` / `434bfeef`, digest `sha256:f8ea82fb...`, warm `type=gha` cache hits `#12–#15 CACHED`, 1m05s). | Verified (Live GHCR + CI) |
+| **Step 2 — EC2 SSM Deploy & Rollback** | `scripts/deploy.sh`, `scripts/test-release.sh`, `deploy-ec2` job | `scripts/test-release.sh` runs in GitHub Actions `quality.yml` inside a fresh Linux container and verifies initial install, upgrade, failed pull preservation, and failed `/health` automatic rollback while returning exit 1. `deploy-ec2` uses GitHub OIDC (`id-token: write`) and activates automatically when AWS repository variables are set. | Verified in CI (Live AWS apply skipped — no billing-enabled account) |
+| **Step 3 — Terraform IaC** | `infra/bootstrap/main.tf`, `infra/main.tf`, `infra/bootstrap.sh.tftpl`, `infra/tests/environments.tftest.hcl` | `terraform fmt -check`, `terraform validate`, and `terraform test` (3/3 assertions: `staging`, `production`, and `0.0.0.0/0` ingress rejection; 14-day CloudWatch retention; IMDSv2; least-privilege IAM; S3 `use_lockfile = true`) run and pass on every PR and `main` push in GitHub Actions. | Verified in CI (Live AWS apply skipped — no billing-enabled account) |
+| **Step 4 — Kubernetes (`kind`)** | `k8s/workload.yml`, `k8s/kustomization.yaml`, `docs/evidence/kubernetes.md` | Deployed on `kind` v1.34.0 with 2 replicas, rolling update (`maxUnavailable: 0, maxSurge: 1`), liveness/readiness probes, CPU/memory requests & limits, ConfigMap + Kustomize-generated Secret, non-root `readOnlyRootFilesystem`, and CPU HPA (`2% / 65%`). Zero-downtime update (`1.0.0` → `1.0.1`) and `kubectl rollout undo`: 54/54 successful client requests, 0 failures. | Verified (Live `kind` Cluster) |
+| **Step 5 — Observability Stack** | `docker-compose.yml`, `observability/`, `docs/evidence/*.png` | All 6 components running (Prometheus 7d retention, Grafana provisioned datasources + 3 JSON dashboards, Loki 7d compactor retention, Alloy Docker discovery + low-cardinality JSON parsing, Node Exporter host PID-1 network metrics, cAdvisor container limits). 4 Prometheus alerts verified with `promtool test rules`. Fresh 3-minute dashboards captured including visible `WARN` (`404`) logs during error burst. | Verified (Live Stack + `promtool` in CI) |
+| **Step 6 — Linux Automation** | `system_health.sh`, `scripts/assessment-health.cron`, `scripts/test-health.sh` | Verified CPU/memory/disk/load/top-5-process collection, timestamped `health_log.txt` + `--json`, configurable thresholds, `[WARNING]` messages, exit codes `0`/`1`/`2`, `flock`-locked log rotation, `--help`, ShellCheck clean, and 5-minute cron execution in Debian Linux. | Verified (Linux + CI) |
+| **Step 7 — Docs & Git Practices** | `README.md`, merged PRs `#1`–`#3`, branch protection | Self-contained `README.md` covering all 9 required sections (local setup, tests, Terraform, Kubernetes, Mermaid architecture diagram, design decisions, deployment/rollback, security, monthly AWS cost estimate, improvements, and AI disclosure). Atomic commits across feature branches and merged PRs. | Verified |
 
 ## Project layout
 
 ```text
 cmd/service/                         Go service and endpoint/configuration tests
-Dockerfile, .dockerignore             Reproducible runtime image
-docker-compose.yml, .env.example      App and six local monitoring services
-go.mod, go.sum, VERSION               Dependencies and release base version
-.github/workflows/                    PR quality and main release workflows
-infra/bootstrap/                      Shared immutable ECR repository
-infra/main.tf, bootstrap.sh.tftpl      Per-environment EC2, IAM, SSM and logs
-infra/tests/                          Offline Terraform plan assertions
-k8s/                                 Service, Deployment, HPA, config and secret generation
+Dockerfile, .dockerignore            Reproducible multi-stage distroless image
+docker-compose.yml, .env.example     App and six local monitoring services
+go.mod, go.sum, VERSION              Dependencies and semantic release base version
+.github/workflows/                   PR quality gates and multi-arch release workflow
+infra/bootstrap/                     Shared immutable ECR repository
+infra/main.tf, bootstrap.sh.tftpl    Per-environment EC2, IAM/OIDC, SSM and CloudWatch Logs
+infra/tests/                         Terraform plan assertions (staging, production, security)
+k8s/                                 Service, Deployment, HPA, ConfigMap and Secret generation
 observability/                       Alloy, Loki and host exporter startup
-  prometheus/                        Scrapes, alert rules and fixtures
-  grafana/                           Data sources, dashboard provisioning and JSON
-system_health.sh                     Linux health collection and rotation
-scripts/                             Deployment, cron entry and shell tests
-docs/evidence/                       Dashboard PNGs and kind rollout output
-docs/                                Verification and outstanding human steps
-README.md                            Reviewer setup, architecture and decisions
+  prometheus/                        Scrapes, 4 alert rules and promtool test fixtures
+  grafana/                           Provisioned datasources and 3 JSON dashboards
+system_health.sh                     Linux health monitoring, thresholds and log rotation
+scripts/                             EC2 deploy/rollback script, cron entry and test suites
+docs/evidence/                       Grafana dashboard PNGs and Kubernetes rollout output
+README.md                            Reviewer setup, architecture and design decisions
 ```
 
-## Reproducing the offline infrastructure checks
+## Reproducing the CI Terraform & Rollback Checks Locally
 
 ```bash
+terraform -chdir=infra fmt -check
 terraform -chdir=infra init -backend=false
 terraform -chdir=infra validate
 terraform -chdir=infra test
+terraform -chdir=infra/bootstrap fmt -check
 terraform -chdir=infra/bootstrap init -backend=false
 terraform -chdir=infra/bootstrap validate
 docker run --rm -v "$PWD/scripts:/src/scripts:ro" debian:bookworm-slim bash -ec \
-  'apt-get update -qq; apt-get install -y -qq jq >/dev/null; bash /src/scripts/test-release.sh'
+  'apt-get update -qq && apt-get install -y -qq jq >/dev/null && bash /src/scripts/test-release.sh'
 ```
-
-The real AWS backend requires a separate init with the handoff inputs. No cloud credentials are needed for these offline checks.

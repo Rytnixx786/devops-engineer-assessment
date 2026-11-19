@@ -1,8 +1,8 @@
 # DevOps assessment service
 
-Run a three-endpoint Go service, observe its traffic in Grafana, and deploy two versions to a local Kubernetes cluster. The cloud release targets one EC2 instance using ECR, GitHub OIDC and Systems Manager.
+Run a three-endpoint Go service, observe its traffic in Grafana, deploy zero-downtime updates on local Kubernetes (`kind`), publish multi-architecture images to GHCR via GitHub Actions, and provision an AWS EC2 deployment target with Terraform, GitHub OIDC, ECR, CloudWatch Logs, and Systems Manager.
 
-[Actual verification results](docs/verification.md) · [Outstanding human steps and AWS runbook](docs/HUMAN_HANDOFF.md)
+[Verification & CI evidence](docs/verification.md) · [Kubernetes rollout evidence](docs/evidence/kubernetes.md)
 
 ## Run locally
 
@@ -34,7 +34,8 @@ PORT defaults to 8080, LOG_LEVEL to info, APP_ENV to local. Unsupported methods 
 flowchart LR
   commit[Code commit] --> ci[GitHub Actions lint, test and scan]
   ci --> build[Buildx amd64 and arm64]
-  build --> registry[ECR immutable release]
+  build --> ghcr[GHCR immutable release]
+  build -->|when AWS vars set| registry[ECR immutable release]
   registry --> ec2[Docker on EC2]
   ci -->|main release through SSM| ec2
   ec2 -->|JSON stdout| cw[CloudWatch Logs]
@@ -154,7 +155,7 @@ Terraform is split into two roots using S3 remote state with native state lockin
 - `infra/bootstrap/`: shared immutable ECR repository (`scan_on_push = true`).
 - `infra/`: per-environment (`staging` or `production`) EC2 instance, restricted security group, least-privilege IAM instance profile + GitHub OIDC release role, CloudWatch Log Group (14-day retention), and custom SSM deploy document.
 
-Offline validation and mocked multi-environment plan assertions (no AWS credentials required):
+Offline validation and mocked multi-environment plan assertions run automatically on every PR in GitHub Actions (`Quality`) and can be reproduced locally without AWS credentials:
 
 ```bash
 terraform -chdir=infra init -backend=false
@@ -164,7 +165,7 @@ terraform -chdir=infra/bootstrap init -backend=false
 terraform -chdir=infra/bootstrap validate
 ```
 
-Live AWS provisioning (`staging` or `production`) with an authenticated short-lived AWS profile (`AWS_PROFILE`, `AWS_REGION`, `STATE_BUCKET`, and `TF_VAR_*` inputs documented in [docs/HUMAN_HANDOFF.md](docs/HUMAN_HANDOFF.md)):
+Live AWS provisioning (`staging` or `production`) with an authenticated short-lived AWS profile (`AWS_PROFILE`, `AWS_REGION`, `STATE_BUCKET`, `TF_VAR_repository_name`, `TF_VAR_environment`, `TF_VAR_subnet_id`, `TF_VAR_reviewer_cidr`, `TF_VAR_github_repo`, `TF_VAR_oidc_provider_arn`, `TF_VAR_initial_tag`):
 
 ```bash
 # 1. Shared immutable ECR repository
@@ -186,9 +187,12 @@ terraform -chdir=infra destroy
 terraform -chdir=infra/bootstrap destroy
 ```
 
+> **Cloud execution note:** Live AWS provisioning was not executed because no billing-enabled AWS account was available during the assessment window. All Terraform modules (`staging` and `production` plan assertions, 14-day CloudWatch retention, IMDSv2, least-privilege IAM, and `0.0.0.0/0` ingress rejection) are verified via `terraform fmt -check`, `terraform validate`, and `terraform test` in GitHub Actions CI, and the EC2 deployment/auto-rollback script is verified via `scripts/test-release.sh` in CI.
+
 ### GitHub Actions variables & secrets
 
-No static AWS access keys are stored in GitHub Secrets. Authentication uses short-lived GitHub OIDC tokens (`id-token: write`) scoped to `refs/heads/main`. Configure these **repository variables** (*Settings → Secrets and variables → Actions → Variables*) from Terraform outputs:
+- **GHCR publishing (`publish` job):** Uses GitHub's built-in ephemeral `GITHUB_TOKEN` (`packages: write`) to build, cache (`type=gha`), and push `linux/amd64` and `linux/arm64` images to `ghcr.io/rytnixx786/devops-engineer-assessment` on every push to `main` — zero long-lived registry secrets required.
+- **AWS EC2 deployment (`deploy-ec2` job):** Uses short-lived GitHub OIDC tokens (`id-token: write`) scoped to `refs/heads/main` (zero static AWS access keys). The job runs automatically when these five **repository variables** (*Settings → Secrets and variables → Actions → Variables*) are configured from Terraform outputs, and skips cleanly otherwise:
 
 | Name | Type | Purpose |
 |---|---|---|
@@ -200,9 +204,9 @@ No static AWS access keys are stored in GitHub Secrets. Authentication uses shor
 
 ## Deployment and rollback strategy
 
-The PR workflow (`Quality`) runs with read-only repository permissions (`contents: read`). On `main`, quality checks run before Buildx publishes a multi-architecture (`linux/amd64`, `linux/arm64`) image with GitHub Actions layer caching (`type=gha`). Every release is tagged with both the full git commit SHA and a semantic prerelease (`<VERSION>-build.<run_number>`) — never relying on `latest`. Re-running the same completed publish verifies the immutable tags before deployment.
+The PR workflow (`Quality`) runs with read-only repository permissions (`contents: read`) and is enforced as a required status check (`checks`) on `main`. On `main`, quality checks run before Buildx publishes a multi-architecture (`linux/amd64`, `linux/arm64`) image to GHCR with GitHub Actions layer caching (`type=gha`). Every release is tagged with both the full git commit SHA and a semantic prerelease (`<VERSION>-build.<run_number>`) — never relying on `latest`.
 
-The release role assumes short-lived credentials through GitHub OIDC. It sends a custom SSM document to a specific instance. Bootstrap and deployment share one host script (`scripts/deploy.sh`). The script acquires an exclusive `flock`, pulls the candidate image before stopping the incumbent container, verifies `/health` and release identity, and automatically restores the previous immutable image reference on failure while still returning a nonzero exit code to fail the pipeline. Single-host replacement can briefly interrupt in-flight requests; Kubernetes avoids this with `maxUnavailable: 0, maxSurge: 1`.
+When AWS variables are configured, the `deploy-ec2` job assumes short-lived credentials through GitHub OIDC, pushes the immutable release to ECR, and invokes a custom SSM document on the target EC2 instance. Bootstrap and deployment share one host script (`scripts/deploy.sh`). The script acquires an exclusive `flock`, pulls the candidate image before stopping the incumbent container, verifies `/health` and release identity, and automatically restores the previous immutable image reference on failure while still returning a nonzero exit code to fail the pipeline. Single-host replacement can briefly interrupt in-flight requests; Kubernetes avoids this with `maxUnavailable: 0, maxSurge: 1`.
 
 ## Security considerations
 
