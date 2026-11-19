@@ -21,6 +21,22 @@ jobs:
           docker run --rm -i hadolint/hadolint:v2.12.0 < Dockerfile
       - uses: actions/upload-artifact@v7
         with: {name: coverage, path: coverage.out}
+      - name: Test deploy and rollback script
+        run: |
+          docker run --rm -v "$PWD/scripts:/src/scripts:ro" debian:bookworm-slim bash -ec \
+            'apt-get update -qq && apt-get install -y -qq jq >/dev/null && bash /src/scripts/test-release.sh'
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: '1.17.1'
+      - name: Validate and test Terraform
+        run: |
+          terraform -chdir=infra fmt -check
+          terraform -chdir=infra init -backend=false
+          terraform -chdir=infra validate
+          terraform -chdir=infra test
+          terraform -chdir=infra/bootstrap fmt -check
+          terraform -chdir=infra/bootstrap init -backend=false
+          terraform -chdir=infra/bootstrap validate
       - name: Test alert rules
         run: docker run --rm --entrypoint promtool -v "$PWD/observability/prometheus:/rules:ro" -w /rules prom/prometheus:v3.6.0 test rules tests.yml
       - name: Build and scan
