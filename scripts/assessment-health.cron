@@ -1,0 +1,4 @@
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+HEALTH_LOG=/var/log/assessment/health_log.txt
+*/5 * * * * root /usr/local/sbin/system_health.sh

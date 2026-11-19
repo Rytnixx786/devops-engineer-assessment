@@ -1,0 +1,19 @@
+groups:
+  - name: assessment
+    rules:
+      - alert: AppDown
+        expr: up{job="app"} == 0
+        for: 1m
+        annotations: {summary: "App is unreachable. Check container health and logs."}
+      - alert: HighServerErrors
+        expr: sum(rate(app_errors_total{class="5xx"}[5m])) / sum(rate(app_requests_total[5m])) > 0.05 and sum(increase(app_requests_total[5m])) >= 20
+        for: 2m
+        annotations: {summary: "Sustained server errors. Inspect application logs."}
+      - alert: HostDiskPressure
+        expr: 1 - node_filesystem_avail_bytes{fstype!~"tmpfs|devtmpfs|squashfs|overlay|proc|sysfs"} / (node_filesystem_size_bytes > 0) > 0.8 and on(instance,device,mountpoint) node_filesystem_readonly == 0
+        for: 10m
+        annotations: {summary: "Writable filesystem above 80 percent utilization."}
+      - alert: ContainerMemoryPressure
+        expr: container_memory_working_set_bytes{name!=""} / (container_spec_memory_limit_bytes > 0 and container_spec_memory_limit_bytes < 1e18) > 0.9
+        for: 5m
+        annotations: {summary: "Container working set exceeds 90 percent of its limit."}

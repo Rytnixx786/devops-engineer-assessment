@@ -1,0 +1,11 @@
+.env
+*.tfstate*
+.terraform/
+*.tfplan
+coverage.out
+health_log.txt*
+k8s/registry.json
+*.local
+.cache/
+*.exe
+DevOps_Engineer_Assessment_Task.pdf

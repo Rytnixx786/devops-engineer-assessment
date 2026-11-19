@@ -1,0 +1,79 @@
+name: devops-assessment
+services:
+  app:
+    image: assessment-service:1.0.0
+    build: .
+    environment:
+      PORT: "8080"
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      APP_ENV: local
+    networks: [default, access]
+    ports: ["127.0.0.1:8080:8080"]
+    healthcheck:
+      test: ["CMD", "/service", "healthcheck"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    restart: unless-stopped
+    cpus: 0.5
+    mem_limit: 96m
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+  prometheus:
+    image: prom/prometheus:v3.6.0
+    command: ["--config.file=/etc/prometheus/prometheus.yml","--storage.tsdb.path=/prometheus","--storage.tsdb.retention.time=7d"]
+    volumes:
+      - ./observability/prometheus:/etc/prometheus:ro
+      - metrics:/prometheus
+  grafana:
+    image: grafana/grafana:12.2.0
+    networks: [default, access]
+    ports: ["127.0.0.1:3000:3000"]
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:?set GRAFANA_ADMIN_USER}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD}
+    volumes:
+      - grafana:/var/lib/grafana
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/assessment-dashboards:ro
+  loki:
+    image: grafana/loki:3.5.5
+    command: ["-config.file=/etc/loki/assessment.yml"]
+    volumes:
+      - ./observability/loki.yml:/etc/loki/assessment.yml:ro
+      - logs:/loki
+  alloy:
+    image: grafana/alloy:v1.10.2
+    command: ["run","--storage.path=/var/lib/alloy","/etc/alloy/config.alloy"]
+    volumes:
+      - ./observability/config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - alloy:/var/lib/alloy
+  node-exporter:
+    image: prom/node-exporter:v1.9.1
+    pid: host
+    entrypoint: ["/bin/sh", "/opt/assessment/start-node-exporter.sh"]
+    volumes:
+      - /:/host:ro
+      - ./observability/start-node-exporter.sh:/opt/assessment/start-node-exporter.sh:ro
+  cadvisor:
+    image: ghcr.io/google/cadvisor:0.55.1
+    privileged: true
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker:/var/lib/docker:ro
+      - /dev/disk:/dev/disk:ro
+networks:
+  default:
+    driver: bridge
+    internal: true
+  access:
+    driver: bridge
+volumes:
+  metrics:
+  grafana:
+  logs:
+  alloy:

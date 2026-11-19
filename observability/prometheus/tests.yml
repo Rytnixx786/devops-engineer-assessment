@@ -1,0 +1,95 @@
+rule_files: [alerts.yml]
+evaluation_interval: 1m
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'up{job="app"}'
+        values: '1 0+0x8 1+0x5'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="AppDown",alertstate="pending"}'
+        eval_time: 1m
+        exp_samples:
+          - labels: 'ALERTS{alertname="AppDown",alertstate="pending",job="app"}'
+            value: 1
+      - expr: 'ALERTS{alertname="AppDown",alertstate="firing"}'
+        eval_time: 0m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="AppDown",alertstate="firing"}'
+        eval_time: 2m
+        exp_samples: 
+          - labels: 'ALERTS{alertname="AppDown",alertstate="firing",job="app"}'
+            value: 1
+      - expr: 'ALERTS{alertname="AppDown",alertstate="firing"}'
+        eval_time: 10m
+        exp_samples: []
+  - interval: 1m
+    input_series:
+      - series: 'app_errors_total{class="5xx"}'
+        values: '0+10x12 120+0x12'
+      - series: 'app_requests_total'
+        values: '0+50x25'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="HighServerErrors",alertstate="pending"}'
+        eval_time: 1m
+        exp_samples:
+          - labels: 'ALERTS{alertname="HighServerErrors",alertstate="pending"}'
+            value: 1
+      - expr: 'ALERTS{alertname="HighServerErrors",alertstate="firing"}'
+        eval_time: 0m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="HighServerErrors",alertstate="firing"}'
+        eval_time: 7m
+        exp_samples: 
+          - labels: 'ALERTS{alertname="HighServerErrors",alertstate="firing"}'
+            value: 1
+      - expr: 'ALERTS{alertname="HighServerErrors",alertstate="firing"}'
+        eval_time: 20m
+        exp_samples: []
+  - interval: 1m
+    input_series:
+      - series: 'node_filesystem_size_bytes{fstype="ext4"}'
+        values: '100+0x20'
+      - series: 'node_filesystem_avail_bytes{fstype="ext4"}'
+        values: '10+0x13 80+0x6'
+      - series: 'node_filesystem_readonly{fstype="ext4"}'
+        values: '0+0x20'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="HostDiskPressure",alertstate="pending"}'
+        eval_time: 1m
+        exp_samples:
+          - labels: 'ALERTS{alertname="HostDiskPressure",alertstate="pending",fstype="ext4"}'
+            value: 1
+      - expr: 'ALERTS{alertname="HostDiskPressure",alertstate="firing"}'
+        eval_time: 0m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="HostDiskPressure",alertstate="firing"}'
+        eval_time: 11m
+        exp_samples: 
+          - labels: 'ALERTS{alertname="HostDiskPressure",alertstate="firing",fstype="ext4"}'
+            value: 1
+      - expr: 'ALERTS{alertname="HostDiskPressure",alertstate="firing"}'
+        eval_time: 15m
+        exp_samples: []
+  - interval: 1m
+    input_series:
+      - series: 'container_memory_working_set_bytes{name="app"}'
+        values: '95+0x10 40+0x8'
+      - series: 'container_spec_memory_limit_bytes{name="app"}'
+        values: '100+0x20'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="ContainerMemoryPressure",alertstate="pending"}'
+        eval_time: 1m
+        exp_samples:
+          - labels: 'ALERTS{alertname="ContainerMemoryPressure",alertstate="pending",name="app"}'
+            value: 1
+      - expr: 'ALERTS{alertname="ContainerMemoryPressure",alertstate="firing"}'
+        eval_time: 0m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="ContainerMemoryPressure",alertstate="firing"}'
+        eval_time: 6m
+        exp_samples: 
+          - labels: 'ALERTS{alertname="ContainerMemoryPressure",alertstate="firing",name="app"}'
+            value: 1
+      - expr: 'ALERTS{alertname="ContainerMemoryPressure",alertstate="firing"}'
+        eval_time: 12m
+        exp_samples: []
