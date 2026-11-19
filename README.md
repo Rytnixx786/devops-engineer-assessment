@@ -8,7 +8,7 @@ Run a three-endpoint Go service, observe its traffic in Grafana, and deploy two 
 
 Use Docker Engine with Linux containers and Compose v2. On Windows, start Docker Desktop with the WSL2 backend and allow project-directory mounts. Ports 8080 and 3000 must be available. The exporters need a Linux engine with host mounts. On Docker Desktop the host dashboard describes the Docker Linux VM. Alloy discovers **all** containers on this engine; use a dedicated engine for a review session with unrelated sensitive workloads.
 
-1. On a fresh checkout copy `.env.example` to `.env` and supply a unique Grafana admin password. For the existing local review workspace, the generated login is in the ignored `.env` file. Grafana initializes its admin credential on first startup against its data volume.
+1. Copy `.env.example` to `.env` and supply a strong, unique `GRAFANA_ADMIN_PASSWORD`. Grafana initializes its admin credential on first startup against its data volume.
 2. From the project root run `docker compose up -d --build` and `docker compose ps`. Wait for app health and at least two 15-second scrapes. Open [the service](http://127.0.0.1:8080/) and [Grafana](http://127.0.0.1:3000/). Sign in, then open Dashboards → Assessment → Application, Host or Containers.
 3. Generate requests with the Bash loop below. Rate panels need more than one scrape to show a trend. Use `docker compose down` to stop this project and keep its data volumes.
 
@@ -51,9 +51,11 @@ flowchart LR
   loki --> grafana
 ```
 
-Go's standard HTTP server and JSON logger handle the API. The Prometheus client owns exposition, histogram buckets and concurrent metric updates. The repository keeps transport, lifecycle, metrics and their endpoint tests in `cmd/service/`. A compiled health-probe subcommand allows the same distroless non-root image to run Docker health checks without adding a shell. Both base manifests are digest-pinned. Docker reported **5,081,380 bytes** for the local linux/amd64 image using `docker image inspect assessment-service:1.0.0 --format '{{.Size}}'`. Platform, export format and registry compression affect measurements.
+Go's standard HTTP server and JSON logger handle the API. The Prometheus client owns exposition, histogram buckets and concurrent metric updates. The repository keeps transport, lifecycle, metrics and their endpoint tests in `cmd/service/`.
 
-EC2 is the assessed deployment target. A single host keeps infrastructure cost and the rollback procedure understandable. ECS would supply a managed service scheduler; EKS would add a managed control plane. Kubernetes is exercised independently on kind. The app owns no durable state; operational state lives in Prometheus/Loki/Grafana volumes, S3, CloudWatch and the release registry.
+**Distroless vs Alpine:** The final image uses `gcr.io/distroless/static-debian12:nonroot` pinned by SHA-256 digest rather than Alpine. Because the Go binary is statically linked (`CGO_ENABLED=0`), it needs neither `glibc` nor `musl`, and distroless removes the shell (`sh`), `apk`, and OS utilities — shrinking the attack surface and CVE footprint compared to Alpine. A compiled `/service healthcheck` subcommand lets Docker run native `HEALTHCHECK` probes without adding `curl`, `wget`, or a shell. Both base manifests are digest-pinned. Docker reported **5,081,380 bytes** (~5.08 MB) for the local `linux/amd64` image via `docker image inspect assessment-service:1.0.0 --format '{{.Size}}'` (platform, export format, containerd unpacked snapshot size, and registry compression affect reported figures).
+
+**EC2 vs ECS vs EKS:** EC2 is the assessed cloud deployment target. A single host keeps infrastructure cost and the rollback procedure transparent. ECS would supply a managed container scheduler with built-in ALB draining; EKS would add a managed Kubernetes control plane with higher baseline cost ($73/month control plane alone). Kubernetes is exercised independently on `kind`. The app owns no durable state; operational state lives in Prometheus/Loki/Grafana volumes, S3, CloudWatch and the release registry.
 
 ## Observability and incident walkthrough
 
@@ -115,30 +117,98 @@ kubectl --context kind-assessment-local port-forward service/app 18080:8080
 The kubelet TLS exception addresses kind's development certificates. Access the app at http://127.0.0.1:18080. For an update test start an in-cluster observer in a second terminal. Use the same explicit context or an isolated KUBECONFIG. Run the update once the observer is Ready, then undo it and inspect the samples:
 
 ```bash
-kubectl run observer --image=busybox:1.37.0 --restart=Never --command -- sh -c \
+kubectl --context kind-assessment-local run observer --image=busybox:1.37.0 --restart=Never --command -- sh -c \
  'while true; do wget -q -T 2 -O - http://app:8080/ || echo FAILED; sleep 0.2; done'
-kubectl wait --for=condition=Ready pod/observer
-kubectl set image deployment/app app=assessment-service:1.0.1
-kubectl rollout status deployment/app
-kubectl rollout undo deployment/app
-kubectl rollout status deployment/app
-kubectl logs observer
-kubectl delete pod observer
+kubectl --context kind-assessment-local wait --for=condition=Ready pod/observer
+kubectl --context kind-assessment-local set image deployment/app app=assessment-service:1.0.1
+kubectl --context kind-assessment-local rollout status deployment/app
+kubectl --context kind-assessment-local rollout undo deployment/app
+kubectl --context kind-assessment-local rollout status deployment/app
+kubectl --context kind-assessment-local logs observer
+kubectl --context kind-assessment-local delete pod observer
 ```
 
-Observed output included `deployment "app" successfully rolled out`, `deployment.apps/app rolled back`, and a second successful rollout. The client received 54 successful responses across both versions. [Full recorded rollout results](docs/evidence/kubernetes.md).
+Observed rollout and rollback output (54 sampled responses across both versions, 0 failures; see [full recorded rollout results](docs/evidence/kubernetes.md)):
+
+```console
+$ kubectl set image deployment/app app=assessment-service:1.0.1
+deployment.apps/app image updated
+$ kubectl rollout status deployment/app
+deployment "app" successfully rolled out
+$ kubectl rollout undo deployment/app
+deployment.apps/app rolled back
+$ kubectl rollout status deployment/app
+deployment "app" successfully rolled out
+```
+
+```text
+NAME   REFERENCE        TARGETS       MINPODS   MAXPODS   REPLICAS
+app    Deployment/app   cpu: 2%/65%   2         5         2
+```
 
 For production EKS, use an ingress controller with TLS and a managed load balancer, signed kubelet certificates, external secret delivery, EKS Pod Identity or IAM roles for service accounts, and node autoscaling with capacity for surge replicas. Spread replicas across failure domains. Use managed worker image-pull identity for ECR. The development HPA uses CPU requests as its utilization baseline.
 
+## Infrastructure as Code (Terraform) & CI/CD configuration
+
+Terraform is split into two roots using S3 remote state with native state locking (`use_lockfile = true`) and encryption (`encrypt = true`):
+- `infra/bootstrap/`: shared immutable ECR repository (`scan_on_push = true`).
+- `infra/`: per-environment (`staging` or `production`) EC2 instance, restricted security group, least-privilege IAM instance profile + GitHub OIDC release role, CloudWatch Log Group (14-day retention), and custom SSM deploy document.
+
+Offline validation and mocked multi-environment plan assertions (no AWS credentials required):
+
+```bash
+terraform -chdir=infra init -backend=false
+terraform -chdir=infra validate
+terraform -chdir=infra test
+terraform -chdir=infra/bootstrap init -backend=false
+terraform -chdir=infra/bootstrap validate
+```
+
+Live AWS provisioning (`staging` or `production`) with an authenticated short-lived AWS profile (`AWS_PROFILE`, `AWS_REGION`, `STATE_BUCKET`, and `TF_VAR_*` inputs documented in [docs/HUMAN_HANDOFF.md](docs/HUMAN_HANDOFF.md)):
+
+```bash
+# 1. Shared immutable ECR repository
+terraform -chdir=infra/bootstrap init -reconfigure \
+  -backend-config="bucket=$STATE_BUCKET" -backend-config="region=$AWS_REGION" \
+  -backend-config="key=assessment/shared/ecr.tfstate"
+terraform -chdir=infra/bootstrap plan -out=registry.tfplan
+terraform -chdir=infra/bootstrap apply registry.tfplan
+
+# 2. Per-environment EC2 target (use separate state keys for staging and production)
+terraform -chdir=infra init -reconfigure \
+  -backend-config="bucket=$STATE_BUCKET" -backend-config="region=$AWS_REGION" \
+  -backend-config="key=assessment/$TF_VAR_environment/terraform.tfstate"
+terraform -chdir=infra plan -out=environment.tfplan
+terraform -chdir=infra apply environment.tfplan
+
+# 3. Teardown after testing (empty ECR images before destroying infra/bootstrap)
+terraform -chdir=infra destroy
+terraform -chdir=infra/bootstrap destroy
+```
+
+### GitHub Actions variables & secrets
+
+No static AWS access keys are stored in GitHub Secrets. Authentication uses short-lived GitHub OIDC tokens (`id-token: write`) scoped to `refs/heads/main`. Configure these **repository variables** (*Settings → Secrets and variables → Actions → Variables*) from Terraform outputs:
+
+| Name | Type | Purpose |
+|---|---|---|
+| `AWS_REGION` | Repository variable | Target AWS region (e.g. `us-east-1`) |
+| `ECR_REPOSITORY` | Repository variable | ECR repository name (without registry hostname) |
+| `AWS_RELEASE_ROLE_ARN` | Repository variable | IAM role ARN from `terraform -chdir=infra output -raw role_arn` |
+| `INSTANCE_ID` | Repository variable | EC2 instance ID from `terraform -chdir=infra output -raw instance_id` |
+| `SSM_DOCUMENT` | Repository variable | SSM document name from `terraform -chdir=infra output -raw ssm_document` |
+
 ## Deployment and rollback strategy
 
-See the [AWS bootstrap, variables, deployment and cleanup runbook](docs/HUMAN_HANDOFF.md). The PR workflow has read-only repository access. On main, quality checks run before Buildx publishes an amd64/arm64 image with layer caching. An immutable SHA and a semantic prerelease such as 1.0.0-build.42 identify one release. Re-running the same completed publish checks the immutable tags before deployment.
+The PR workflow (`Quality`) runs with read-only repository permissions (`contents: read`). On `main`, quality checks run before Buildx publishes a multi-architecture (`linux/amd64`, `linux/arm64`) image with GitHub Actions layer caching (`type=gha`). Every release is tagged with both the full git commit SHA and a semantic prerelease (`<VERSION>-build.<run_number>`) — never relying on `latest`. Re-running the same completed publish verifies the immutable tags before deployment.
 
-The release role assumes short-lived credentials through GitHub OIDC. It sends a custom SSM document to a specific instance. Bootstrap and deployment share one host script. The script locks releases, pulls the candidate before stopping the incumbent, checks /health and release identity, and restores the previous immutable reference on failure. Recovery still returns a failed release status. Single-host replacement can briefly interrupt requests. Kubernetes uses a surge replica and zero unavailable replicas during normal rollout.
+The release role assumes short-lived credentials through GitHub OIDC. It sends a custom SSM document to a specific instance. Bootstrap and deployment share one host script (`scripts/deploy.sh`). The script acquires an exclusive `flock`, pulls the candidate image before stopping the incumbent container, verifies `/health` and release identity, and automatically restores the previous immutable image reference on failure while still returning a nonzero exit code to fail the pipeline. Single-host replacement can briefly interrupt in-flight requests; Kubernetes avoids this with `maxUnavailable: 0, maxSurge: 1`.
 
 ## Security considerations
 
-The app runs as UID/GID 65532, with a read-only root and dropped capabilities locally and on Kubernetes. Its runtime needs no inbound administrative port. The EC2 security group permits only the app port from a restricted CIDR, uses IMDSv2, and leaves port 22 closed. The instance has the SSM managed core policy, repository-scoped pull access and log writes scoped to its log group. Registry authentication requires the AWS wildcard-resource token action. S3 state uses locking and encryption. AWS account credentials, Terraform state, registry JSON and local environment files belong outside published files.
+**Image scanning & supply-chain hygiene:** Every PR and release runs `hadolint` on the `Dockerfile`, `shellcheck` on all shell scripts, and Trivy (`aquasec/trivy:0.69.3`) against the built image, failing the pipeline on any `CRITICAL` vulnerability (`--severity CRITICAL --exit-code 1`). ECR repositories enforce immutable tags and `scan_on_push = true`, and all container base/monitoring images are pinned to explicit versions or SHA-256 digests.
+
+**Runtime, IAM & network isolation:** The app runs as UID/GID `65532`, with a read-only root filesystem and dropped capabilities locally and on Kubernetes. Its runtime needs no inbound administrative port. The EC2 security group permits only port `8080` from a restricted IPv4 CIDR, enforces IMDSv2 (`http_tokens = "required"`), and leaves port 22 closed. The instance has the SSM managed core policy, repository-scoped ECR pull access, and CloudWatch log writes scoped to its log group. Registry authentication requires the AWS wildcard-resource `ecr:GetAuthorizationToken` action. S3 state uses native locking and encryption. AWS account credentials, Terraform state, `k8s/registry.json`, and local `.env` files are gitignored and never committed.
 
 Only app 8080 and Grafana 3000 bind host loopback. The collectors share an internal Docker network. Node Exporter receives read-only host root/proc/sys views and the host PID namespace for host measurements. cAdvisor uses privileged runtime access and read-only rootfs, /sys, /var/run, Docker storage and /dev/disk for cgroups, runtime discovery and disk metadata. Alloy reads the Docker socket for discovery and log access. A read-only bind mount of a socket still permits powerful API calls. Run the stack on a trusted assessment engine. The host-root bind is static, so restart the exporter to include newly mounted filesystems where mount propagation is unavailable.
 
@@ -152,4 +222,4 @@ A second EC2 deployment target behind a load balancer would reduce replacement d
 
 ## AI assistance
 
-OpenAI Codex assisted with assessment analysis, service and infrastructure implementation, documentation, and local test execution. The verification report distinguishes observed results from outstanding live-account evidence. Git history and public submission belong to the candidate.
+AI coding assistants (OpenAI Codex and Antigravity / Gemini) assisted with assessment analysis, service and infrastructure implementation, CI/CD workflow setup, documentation, and verification. Every component, design trade-off, and verification result was reviewed and is owned by the candidate.
